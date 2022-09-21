@@ -1,59 +1,59 @@
 close all; clear all; delete (instrfindall); clc; fclose('all'); dbclear if error;
 
 
-% ----- 1.Komunikasi MQTT nodemcu matlab ------------------------------ %
+% ----- 1.Communication between NodeMCU and Matlab (PC) using MQTT Protocol ------------------------------ %
 myMQTT = mqtt('tcp://192.168.43.248','ClientID','0001','Port',1882);
 topic1 = 'SinyalKontrol1'; mySub1 = subscribe(myMQTT,'datasensor1', 'QoS', 0);
 topic2 = 'SinyalKontrol2'; mySub2 = subscribe(myMQTT,'datasensor2', 'QoS', 0);
 
-% ----- 2.Baca data lookup table -------------------------------------- %
-n       = csvread('mapDatabase.csv',0,0,[0 0 11 0]);  % nomer track
-x0      = csvread('mapDatabase.csv',0,1,[0 1 11 1]);  % posisi segmen track (x)
-y0      = csvread('mapDatabase.csv',0,2,[0 2 11 2]);  % posisi segmen track (y)
-l0      = csvread('mapDatabase.csv',0,3,[0 3 11 3]);  % posisi segmen track dalam 1D
-plusmin = csvread('mapDatabase.csv',0,4,[0 4 11 4]);  % plus minus pada map matching
-xCenter = csvread('mapDatabase.csv',0,5,[0 5 11 5]);  % pusat lingkaran track belok (x)
-yCenter = csvread('mapDatabase.csv',0,6,[0 6 11 6]);  % pusat lingkaran track belok (y)
+% ----- 2.Reading Track Characteristic Data from Database -------------------------------------- %
+n       = csvread('mapDatabase.csv',0,0,[0 0 11 0]);  % Track Number
+x0      = csvread('mapDatabase.csv',0,1,[0 1 11 1]);  % Coordinate of Track Segment (x)
+y0      = csvread('mapDatabase.csv',0,2,[0 2 11 2]);  % Coordinate of Track Segment (y)
+l0      = csvread('mapDatabase.csv',0,3,[0 3 11 3]);  % Position of Track in 1D Coordinate
+plusmin = csvread('mapDatabase.csv',0,4,[0 4 11 4]);  % Map Matching Database
+xCenter = csvread('mapDatabase.csv',0,5,[0 5 11 5]);  % Center of Curvature (x)
+yCenter = csvread('mapDatabase.csv',0,6,[0 6 11 6]);  % Center of Curvature (y)
 x0(13) = x0(1); y0(13) = y0(1);
 
 
 
 
-% ----- 4.Set parameter kontrol Takagi ------------------------------- %
+% ----- 4.Setting Takagi Control Parameter ------------------------------- %
 b = takagi_function;
-b.n = 1;                            % jumlah kereta
-b.l = 0.27 * ones(1,b.n);           % panjang kereta (27 cm)
-b.vMax = 0.6;                       % kecepatan maksimum (m/s)
-b.aMax = 0.3;                       % perlambatan maksimum (m/s^2)
-b.dSafe = 0.27;                     % jarak aman antar kereta (m)
-b.k = 1;                            % konstanta perlambatan
+b.n = 1;                            % Number of Trains
+b.l = 0.27 * ones(1,b.n);           % Length of Train (27 cm)
+b.vMax = 0.6;                       % Maximum Velocity (m/s)
+b.aMax = 0.3;                       % Maximum Decceleration (m/s^2)
+b.dSafe = 0.27;                     % Minimum Headway (m)
+b.k = 1;                            % Decceleration Constant
 
-b.tS = zeros(1,b.n);                % incremental timer waktu kereta berhenti di stasiun
-b.maxS = 2;                         % lama waktu maksimum kereta berhenti di stasiun (s)
-s1 = [0.5 ; 0.5];                     % stasiun kecil 1
-s2 = [2 ; 0.5];                   % stasiun kecil 2
-s3 = [3.5 ; 0.5];                     % stasiun kecil 3
-s4 = [5.3 ; 0.5];                   % stasiun besar
-b.s = [s4, s3;                      % stasiun tempat kereta 1 berhenti
-    s4, s2;                         % stasiun tempat kereta 2 berhenti
-    s4, s1];                        % stasiun tempat kereta 3 berhenti
-b.sLast = zeros(1,b.n);             % stasiun terakhir berhenti
-b.strt_ctrl = zeros(1,b.n);         % kondisi apakah sedang start control
-debugg = {'init','init','init'};    % display kontrol
+b.tS = zeros(1,b.n);                % Incremental Train Stop Time in Station
+b.maxS = 2;                         % Duration of Train Stop in Station (s)
+s1 = [0.5 ; 0.5];                     % Small Station 1
+s2 = [2 ; 0.5];                   % Small Station 2
+s3 = [3.5 ; 0.5];                     % Small Station 3
+s4 = [5.3 ; 0.5];                   % Main Station
+b.s = [s4, s3;                      % Stop Station 1
+    s4, s2;                         % Stop Station 2
+    s4, s1];                        % Stop Station 3
+b.sLast = zeros(1,b.n);             % Terminus Station
+b.strt_ctrl = zeros(1,b.n);         % Initial Condition Start Control
+debugg = {'init','init','init'};    % State (Acceleration, Brake, Init)
 
 
-% ----- 3.Set matrix dan parameter kalman ----------------------------- %
+% ----- 3.Set Kalman Matrix and Parameter ----------------------------- %
 f = @(x, v)[ ...
     (x(1)+v(1)) ;
-    (x(2)+v(2)) ];                  % (posisi) matriks state transition
-h = @(x, v)[x(1);x(2)];             % (posisi) matriks output
-P = eye(2);                         % (posisi) kovariansi
-sigma_q = 10;                       % (posisi) tingkat kepercayaan prediksi
-sigma_r = 1;                        % (posisi) tingkat kepercayaan pengukuran
-R = sigma_r^2;                      % (posisi) noise pengukuran
+    (x(2)+v(2)) ];                  % (Position) Transition State Matrix
+h = @(x, v)[x(1);x(2)];             % (Position) Output Matrix
+P = eye(2);                         % (Position) Covariance
+sigma_q = 10;                       % (Position) Level of Confidence Prediction
+sigma_r = 1;                        % (Position) Level of Confidence Measurement
+R = sigma_r^2;                      % (Position) Measurement Noise
 
 
-% ----- 5.Inisiasi data awal ------------------------------------------ %
+% ----- 5.Initialization ------------------------------------------ %
 %Kconv = [3, 2, 3]; Kspan = zeros(3,b.n);
 [pwmMotor, pwmTreshold] = deal(zeros(1,b.n));
 [xKalman, xPred] = deal(zeros(1,2*b.n));
@@ -67,7 +67,7 @@ for j=1:b.n
 end
 
 
-% ----- 6.Membuat lintasan ideal ------------------------------------- %
+% ----- 6.Creating Ideal Track (for Plotting Purposes) ------------------------------------- %
 ll = 2; cc = 0.49; rr = 0.165;      % marvelmind distance; curve center; track from point zero
 Rad = cc-rr; margin = 0.05;         % curved track radius; marvelmind error margin
 figure, rectangle('Position',[rr  rr (ll-2*rr) (ll-2*rr)],'Curvature',(Rad));
@@ -78,19 +78,19 @@ axis ([0 ll 0 ll]); hold on
 for i = 1:300                      % for every seconds
     for j = 1:b.n                   % for every train
         
-        % ----- 7.Transfer data dari nodemcu ------------------------- %
+        % ----- 7.Data Transfer from NodeMCU ------------------------- %
         pause(0.04);
-        dat = read(eval(['mySub' num2str(j)])); % membaca data
-        datkon = str2num(dat);      % konversi tipe data string menjadi numerik
-        xmarvel = datkon(1)/1000;   % data posisi x
-        ymarvel = datkon(2)/1000;   % data posisi y dari sensor Marvelmind
-        rfid = datkon(3);           % data nomer RFID
-        speed = datkon(4);          % data kecepatan rotary encoder
-        time = datkon(5);           % data waktu sampling
+        dat = read(eval(['mySub' num2str(j)])); %  Reading Data
+        datkon = str2num(dat);      % Converting Data from String to Numeric
+        xmarvel = datkon(1)/1000;   % Position Data (x) from Indoor GPS Marvelmind Sensor
+        ymarvel = datkon(2)/1000;   % Position Data (y) from Indoor GPS Marvelmind Sensor
+        rfid = datkon(3);           % Position Data (x,y) from RFID Sensor
+        speed = datkon(4);          % Speed Data from Rotary Encoder Data
+        time = datkon(5);           % Sampling Time
         Ardu_PWM = datkon(6); disp(Ardu_PWM);
 
 
-        % ----- 8.Menentukan track dimana kereta berada -------------- %
+        % ----- 8.Determining Track in Which Train is Located -------------- %
         [ xBool(1), xBool(13)] = deal(xmarvel - x0(1));
         [ yBool(1), yBool(13)] = deal(ymarvel - y0(1));
         for k = 2:size(n)+1
@@ -102,7 +102,7 @@ for i = 1:300                      % for every seconds
         end
 
 
-        % ----- 9.Algoritma virtual imu ------------------------------ %
+        % ----- 9.Virtual Inertial Measurement Unit (IMU) Algorithm ------------------------------ %
         switch track
             case {1, 2, 4, 5}
                 theta = atand( (yCenter(track)-ymarvel) / (xCenter(track)-xmarvel) ) - 90;
@@ -113,7 +113,7 @@ for i = 1:300                      % for every seconds
         end
 
 
-        % ----- 11.Kalman filter posisi ------------------------------------- %
+        % ----- 11.Kalman Filter Algorithm to Determine Position ------------------------------------- %
         Q = sigma_q^2 * time * eye(2);          % initial noise state / prediksi
         x = xKalman(i,2*j-1:2*j)';
         v = [speed*cosd(theta)*time; speed*sind(theta)*time];
@@ -123,7 +123,7 @@ for i = 1:300                      % for every seconds
         xKalman(i+1,2*j-1:2*j) = x';
 
 
-        % ----- 12.Map matching posisi kereta ------------------------ %
+        % ----- 12.Map Matching Algorithm to Determine Train Position ------------------------ %
         switch track
             case {1, 5, 7, 11}
                 xnew = xKalman(i+1,2*j-1);
@@ -143,11 +143,11 @@ for i = 1:300                      % for every seconds
         end
 
 
-        % ----- 13.Konversi 2D ke 1D tracking ------------------------ %
+        % ----- 13.Conversion from 2D to 1D Position Tracking ------------------------ %
         lnew = l0(track) + sqrt( (xnew-x0(track))^2 + (ynew-y0(track))^2 );
 
 
-        % ----- 14.Kontrol Takagi ------------------------------------ %
+        % ----- 14.Takagi Synchronization Control Algorithm ------------------------------------ %
         b.x(j) = lnew;                          % position
         b.v(j) = vCtrl(i,j);                    % velocity
         if b.v(j) > 0                           % IF train run
@@ -191,7 +191,7 @@ for i = 1:300                      % for every seconds
         vCtrl(i+1,j) = b.v(j) - b.a(j)*time;
         
         
-        % ------ 15.Kontrol pwm motor -------------------------------- %
+        % ------ 15.Pulse Width Modulation (PWM) Motor Control -------------------------------- %
         if pwmMotor(i,j) < pwmTreshold(j), pwmMotor(i,j) = pwmTreshold(j); end          % ...(a)
         %for k=1:3,if pwmMotor(i,j) <= Kspan(k,j), Kpwm = Kconv(k); break; end, end      % ...(b)
         eSpeed(i+1,j) = vCtrl(i+1,j) - vCtrl(i,j);
@@ -199,14 +199,14 @@ for i = 1:300                      % for every seconds
         if pwmMotor(i+1,j) <= pwmTreshold(j), pwmMotor(i+1,j) = 0; end                  % ...(d)
         if pwmMotor(i+1,j) > 1023, pwmMotor(i+1,j) = 1023; end                          % ...(e)
         publish(myMQTT, eval(['topic' num2str(j)]), num2str(pwmMotor(i+1,j)));          % ...(f)
-        % a.jika pwm sebelumnya dibawah treshold, maka pwm_last menjadi treshold
-        % b.cari faktor konversi(K) antara speed dan pwm
+        % a.if the previous pwm is below the threshold, then pwm_last becomes the threshold
+        % b.find the conversion factor(K) between speed and pwm
         % c.pwm_desired = pwm_last + K(speed_desired - speed_kalman)
-        % d.jika pwm_desired dibawah treshold, maka pwm_desired menjadi 0 untuk menghindari stalling
-        % e.jika pwm_desired diatas pwm maksimum, maka pwm_desired = 1023
+        % d.if pwm_desired is below the threshold, then pwm_desired becomes 0 to avoid stalling
+        % e.if pwm_desired is above the maximum pwm, then pwm_desired = 1023
 
 
-        % ------ 16.Simpan hasil di variabel buffer ------------------ %
+        % ------ 16.Store The Result in Buffer Variables ------------------ %
         tBuff(i+1,j) = track;
         rBuff(i+1,j) = rfid;
         xBuff(i+1,j) = xnew;
